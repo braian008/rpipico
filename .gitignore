@@ -1,1 +1,4 @@
 settings.py
+.micropico
+extensions.json
+settings.json
