@@ -29,8 +29,8 @@ async def wifi_han(state):
 
 # If you connect with clean_session True, must re-subscribe (MQTT spec 3.1.2.4)
 async def conn_han(client):
-    await client.subscribe('topicobraian/temperatura', 1)
-    await client.subscribe('topicobraian/humedad', 1)
+    await client.subscribe('ID_DEL_DISPOSITIVO_BRAIAN/temperatura', 1)
+    await client.subscribe('ID_DEL_DISPOSITIVO_BRAIAN/humedad', 1)
 
 async def main(client):
     await client.connect()
@@ -41,12 +41,12 @@ async def main(client):
             d.measure()
             try:
                 temperatura=d.temperature()
-                await client.publish('topicobraian/temperatura', '{}'.format(temperatura), qos = 1)
+                await client.publish('ID_DEL_DISPOSITIVO_BRAIAN/temperatura', '{}'.format(temperatura), qos = 1)
             except OSError as e:
                 print("sin sensor temperatura")
             try:
                 humedad=d.humidity()
-                await client.publish('topicobraian/humedad', '{}'.format(humedad), qos = 1)
+                await client.publish('ID_DEL_DISPOSITIVO_BRAIAN/humedad', '{}'.format(humedad), qos = 1)
             except OSError as e:
                 print("sin sensor humedad")
         except OSError as e:
