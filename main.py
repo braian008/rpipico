@@ -1,89 +1,107 @@
-# (C) Copyright Peter Hinch 2017-2019.
-# Released under the MIT licence.
-
 from mqtt_as import MQTTClient
 from mqtt_local import config
 import uasyncio as asyncio
 import dht, machine
+from machine import Pin
+import network
+import ubinascii
 
-# Configuración del sensor y del LED integrado de la Pico W / Pico 2W
+
+device_id=ubinascii.hexlify(machine.unique_id()).decode()
+print(device_id)
+# Configuración de Hardware
 d = dht.DHT22(machine.Pin(15))
+led_board = Pin("LED", Pin.OUT)
+rele_control = machine.Pin(16, machine.Pin.OUT)
+rele_control.value(1) # Iniciamos relé apagado (depende de tu relé)
 
+# Variables de control
 mensajes_recibidos = []
 evento_mensaje = asyncio.Event()
+modo = "manual"  # Asegúrate de que sea minúscula para coincidir con la evaluación
+setpoint= 25
 
-# Esta es la función que RECIBE los mensajes de MQTTX
+# Función de destello corregida para no bloquear el sistema
+async def destello():
+    print("LED destellando...")
+    led_board.on()
+    await asyncio.sleep(1) # Usamos asyncio.sleep en lugar de time.sleep
+    led_board.off()
+    print("Listo")
+
 def sub_cb(topic, msg, retained):
-    # Decodificamos los bytes a texto para poder compararlos
-    """topic_str = topic.decode()
-    msg_str = msg.decode()"""
     mensajes_recibidos.append((topic.decode(), msg.decode()))
     evento_mensaje.set()
-    #print('Mensaje recibido - Topic: {} -> Valor: {}'.format(topic_str, msg_str))
-    
+
 async def wifi_han(state):
     print('Wifi is ', 'up' if state else 'down')
     await asyncio.sleep(1)
 
-# Al conectar, nos suscribimos a los tópicos que queremos escuchar
 async def conn_han(client):
-    # Mantenemos las suscripciones anteriores (opcional si solo publicas ahí)
-    #await client.subscribe('ID_DEL_DISPOSITIVO_BRAIAN/temperatura', 1)
-    #await client.subscribe('ID_DEL_DISPOSITIVO_BRAIAN/humedad', 1)
-    
-    # NUEVO: Nos suscribimos al tópico de control para recibir comandos
+    # Suscripciones
     await client.subscribe('ID_DEL_DISPOSITIVO_BRAIAN/control', 1)
 
-async def main(client):
-    await client.connect()
-    await asyncio.sleep(2)  # Damos tiempo al broker
-    
+# TAREA 1: Procesar mensajes de MQTTX (Lectura)
+async def procesar_mensajes():
+    global modo
     while True:
-        # El programa se queda aquí esperando a que el evento se active
         await evento_mensaje.wait()
-        
-        # Como el evento se activó, procesamos todos los mensajes en la lista
         while mensajes_recibidos:
-            # Sacamos el primer mensaje que llegó a la lista
             topic, msg = mensajes_recibidos.pop(0)
+            msg = msg.lower().strip() # Limpiamos el mensaje
             
-            print('Procesando en el main - Tópico: {} -> Valor: {}'.format(topic, msg))
+            print('Comando recibido:', msg)
             
-            # ¡Tu código secuencial va aquí!
-            if msg == 'ON':
-                print("Ejecutando ON...")
-                await asyncio.sleep(1) # Puedes usar sleep sin problemas
+            if msg == 'destello':
+                await destello() # Llamamos a la función asíncrona
+            
+            elif msg == 'relé' and modo == "manual":
+                rele_control.toggle()
+                print("Relé cambiado a:", rele_control.value())
                 
-            elif msg == 'OFF':
-                print("Ejecutando OFF...")
-        
-        # Una vez que procesamos todo, limpiamos el evento para volver a dormir y esperar
+            elif msg == 'auto':
+                modo = "auto"
+                print("Modo cambiado a AUTOMÁTICO")
+                
+            elif msg == 'manual':
+                modo = "manual"
+                print("Modo cambiado a MANUAL")
+
         evento_mensaje.clear()
 
-
-    """await client.connect()
-    await asyncio.sleep(2)  # Damos tiempo al broker
-    
+# TAREA 2: Leer sensores y enviar datos (Escritura)
+async def enviar_sensores(client):
     while True:
         try:
             d.measure()
-            try:
-                temperatura = d.temperature()
-                await client.publish('ID_DEL_DISPOSITIVO_BRAIAN/temperatura', '{}'.format(temperatura), qos = 1)
-            except OSError as e:
-                print("Error: sin sensor temperatura")
-                
-            try:
-                humedad = d.humidity()
-                await client.publish('ID_DEL_DISPOSITIVO_BRAIAN/humedad', '{}'.format(humedad), qos = 1)
-            except OSError as e:
-                print("Error: sin sensor humedad")
-                
-        except OSError as e:
-            print("Error: sin sensor")
+            t = d.temperature()
+            h = d.humidity()
             
-        await asyncio.sleep(20)  # Publicamos cada 20 segundos
-"""
+            if modo == "auto":
+                if t > setpoint:
+                    rele_control.value(0) # Apaga si sobrepasa
+                    print("   [AUTO] Temperatura ALTA: Relé en 0")
+                else:
+                    rele_control.value(1) # Enciende si está por debajo
+                    print("   [AUTO] Temperatura OK/BAJA: Relé en 1")
+
+            print("Publicando: T:{}°C, H:{}%".format(t, h))
+            
+            # Publicamos en los tópicos correspondientes
+            await client.publish('ID_DEL_DISPOSITIVO_BRAIAN/temperatura', str(t), qos=1)
+            await client.publish('ID_DEL_DISPOSITIVO_BRAIAN/humedad', str(h), qos=1)
+            
+        except OSError:
+            print("Error leyendo el sensor DHT22")
+            
+        # Espera 30 segundos antes de la siguiente lectura
+        await asyncio.sleep(30)
+
+async def main(client):
+    await client.connect()
+    # Ejecutamos ambas tareas al mismo tiempo
+    await asyncio.gather(procesar_mensajes(), enviar_sensores(client))
+
 # Define configuración
 config['subs_cb'] = sub_cb
 config['connect_coro'] = conn_han
